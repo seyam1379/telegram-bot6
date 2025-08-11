@@ -9,20 +9,31 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
 // Webhook endpoint
 app.post("/webhook", async (req, res) => {
-  console.log(req.body);
+  console.log("📩 Incoming update from Telegram:", req.body);
 
-  const chatId = req.body.message?.chat.id;
+  const chatId = req.body.message?.chat?.id;
   const text = req.body.message?.text;
 
   if (chatId && text) {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: `You said: ${text}`
-      }),
-    });
+    try {
+      const response = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `You said: ${text}`
+        }),
+      });
+
+      const data = await response.json();
+      console.log("📤 Telegram API response:", data);
+
+      if (!data.ok) {
+        console.error("❌ Error sending message:", data.description);
+      }
+    } catch (err) {
+      console.error("🔥 Error in sendMessage:", err);
+    }
   }
 
   res.sendStatus(200);
@@ -34,5 +45,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(3000, () => {
-  console.log("Server running on port 3000");
+  console.log("🚀 Server running on port 3000");
 });
