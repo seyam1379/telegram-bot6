@@ -5,185 +5,137 @@ const app = express();
 app.use(express.json());
 
 const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = "5365915138";
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const ADMIN_ID = "5365915138";
 
-// Store user states in memory
+// Store user steps
 const userStates = {};
 
 // Helper to send messages
 async function sendMessage(chatId, text, keyboard = null) {
-  const body = {
+  const payload = {
     chat_id: chatId,
-    text: text,
+    text,
   };
   if (keyboard) {
-    body.reply_markup = keyboard;
+    payload.reply_markup = {
+      keyboard: keyboard.map(row => row.map(button => ({ text: button }))),
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    };
   }
-
   await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 }
 
-// Webhook endpoint
+// Handle webhook
 app.post("/webhook", async (req, res) => {
   const message = req.body.message;
-  if (!message) return res.sendStatus(200);
+  if (!message || !message.chat) return res.sendStatus(200);
 
   const chatId = message.chat.id;
-  const text = message.text;
+  const text = message.text?.trim();
 
-  if (!userStates[chatId]) {
-    userStates[chatId] = { step: 0, data: {} };
-  }
-
-  const user = userStates[chatId];
-
-  // Step 0: Start
   if (text === "/start") {
-    user.step = 1;
-    await sendMessage(chatId, "Welcome! Please enter your full name:");
+    userStates[chatId] = { step: "getName" };
+    await sendMessage(
+      chatId,
+      "Добро пожаловать! Пожалуйста, введите ваше полное имя и номер телефона в одном сообщении:\nПример: Иван Иванов, +79990000000"
+    );
     return res.sendStatus(200);
   }
 
-  // Step 1: Ask name
-  if (user.step === 1) {
-    user.data.name = text;
-    user.step = 2;
-    await sendMessage(chatId, "Thanks! Now please enter your phone number:");
+  const state = userStates[chatId];
+
+  if (!state) {
+    await sendMessage(chatId, "Пожалуйста, введите /start, чтобы начать.");
     return res.sendStatus(200);
   }
 
-  // Step 2: Ask phone
-  if (user.step === 2) {
-    user.data.phone = text;
-    user.step = 3;
-    await sendMessage(chatId, "Choose your marketplace:", {
-      inline_keyboard: [
-        [{ text: "Wildberries", callback_data: "wildberries" }],
-        [{ text: "Yandex", callback_data: "yandex" }],
-        [{ text: "Ozon", callback_data: "ozon" }],
-      ],
-    });
-    return res.sendStatus(200);
+  switch (state.step) {
+    case "getName":
+      state.namePhone = text;
+      state.step = "chooseMarketplace";
+      await sendMessage(chatId, "Выберите маркетплейс:", [
+        ["Wildberries", "Yandex", "Ozon"]
+      ]);
+      break;
+
+    case "chooseMarketplace":
+      state.marketplace = text;
+      if (text === "Wildberries") {
+        state.step = "chooseWBType";
+        await sendMessage(chatId, "Выберите тип:", [
+          ["FBS", "FBW"]
+        ]);
+      } else if (text === "Yandex") {
+        state.step = "chooseWarehouse";
+        state.type = "FBS";
+        await sendMessage(chatId, "Выберите склад:", [
+          ["Yandex Market-Южный ворота"]
+        ]);
+      } else if (text === "Ozon") {
+        state.step = "chooseWarehouse";
+        state.type = "FBS";
+        await sendMessage(chatId, "Выберите склад:", [
+          ["OZON-Южный ворота"]
+        ]);
+      } else {
+        await sendMessage(chatId, "Пожалуйста, выберите один из предложенных вариантов.");
+      }
+      break;
+
+    case "chooseWBType":
+      state.type = text;
+      state.step = "chooseWarehouse";
+      if (text === "FBS") {
+        await sendMessage(chatId, "Выберите склад:", [
+          ["Белая дача", "Видное", "Обухово"]
+        ]);
+      } else if (text === "FBW") {
+        await sendMessage(chatId, "Выберите склад:", [
+          ["Екатеринбург", "Казань", "Коледино"],
+          ["Краснодар", "Невинномысск", "Новосемейкино"],
+          ["Подольск", "Тула", "Электросталь"]
+        ]);
+      } else {
+        await sendMessage(chatId, "Пожалуйста, выберите FBS или FBW.");
+      }
+      break;
+
+    case "chooseWarehouse":
+      state.warehouse = text;
+      state.step = "getQuantity";
+      await sendMessage(
+        chatId,
+        "Пожалуйста, укажите количество и габариты (высота, вес, длина):\nПример: 100 шт, 10 кг, 50x40x30 см"
+      );
+      break;
+
+    case "getQuantity":
+      state.quantityMeasurements = text;
+
+      // Send details to admin
+      const adminMessage = `📦 Новый заказ:
+👤 Клиент: ${state.namePhone}
+🏬 Маркетплейс: ${state.marketplace}
+📦 Тип: ${state.type || "N/A"}
+📍 Склад: ${state.warehouse}
+📏 Кол-во и размеры: ${state.quantityMeasurements}`;
+      await sendMessage(ADMIN_ID, adminMessage);
+
+      await sendMessage(chatId, "✅ Спасибо! Мы свяжемся с вами в ближайшее время для уточнения цены.");
+      delete userStates[chatId];
+      break;
   }
 
   res.sendStatus(200);
 });
 
-// Handle callback buttons
-app.post("/webhook", async (req, res) => {
-  const callback = req.body.callback_query;
-  if (!callback) return res.sendStatus(200);
-
-  const chatId = callback.message.chat.id;
-  const data = callback.data;
-
-  if (!userStates[chatId]) return res.sendStatus(200);
-  const user = userStates[chatId];
-
-  // Marketplace selection
-  if (user.step === 3) {
-    user.data.marketplace = data;
-    if (data === "wildberries") {
-      user.step = 4;
-      await sendMessage(chatId, "Choose mode:", {
-        inline_keyboard: [
-          [{ text: "FBS", callback_data: "wb_fbs" }],
-          [{ text: "FBW", callback_data: "wb_fbw" }],
-        ],
-      });
-    } else if (data === "yandex") {
-      user.step = 5;
-      user.data.mode = "FBS";
-      await sendMessage(chatId, "Choose warehouse:", {
-        inline_keyboard: [
-          [{ text: "Yandex Market-Южный ворота", callback_data: "yandex_fbs" }],
-        ],
-      });
-    } else if (data === "ozon") {
-      user.step = 5;
-      user.data.mode = "FBS";
-      await sendMessage(chatId, "Choose warehouse:", {
-        inline_keyboard: [
-          [{ text: "OZON-Южный ворота", callback_data: "ozon_fbs" }],
-        ],
-      });
-    }
-    return res.sendStatus(200);
-  }
-
-  // Wildberries mode selection
-  if (user.step === 4) {
-    user.data.mode = data === "wb_fbs" ? "FBS" : "FBW";
-    user.step = 5;
-    if (data === "wb_fbs") {
-      await sendMessage(chatId, "Choose warehouse:", {
-        inline_keyboard: [
-          [{ text: "Белая дача", callback_data: "wb_belaya" }],
-          [{ text: "Видное", callback_data: "wb_vidnoe" }],
-          [{ text: "Обухово", callback_data: "wb_obukhovo" }],
-        ],
-      });
-    } else {
-      await sendMessage(chatId, "Choose warehouse:", {
-        inline_keyboard: [
-          [{ text: "Екатеринбург", callback_data: "wb_ekb" }],
-          [{ text: "Казань", callback_data: "wb_kazan" }],
-          [{ text: "Коледино", callback_data: "wb_koledino" }],
-          [{ text: "Краснодар", callback_data: "wb_krasnodar" }],
-          [{ text: "Невинномысск", callback_data: "wb_nevinnomyssk" }],
-          [{ text: "Новосемейкино", callback_data: "wb_novosemeykino" }],
-          [{ text: "Подольск", callback_data: "wb_podolsk" }],
-          [{ text: "Тула", callback_data: "wb_tula" }],
-          [{ text: "Электросталь", callback_data: "wb_elektrostal" }],
-        ],
-      });
-    }
-    return res.sendStatus(200);
-  }
-
-  // Warehouse selection
-  if (user.step === 5) {
-    user.data.warehouse = data;
-    user.step = 6;
-    await sendMessage(chatId, "Please send product dimensions and weight (e.g., 30x20x15 cm, 2 kg):");
-    return res.sendStatus(200);
-  }
-
-  res.sendStatus(200);
-});
-
-// Handle text after warehouse selection
-app.post("/webhook", async (req, res) => {
-  const message = req.body.message;
-  if (!message) return res.sendStatus(200);
-
-  const chatId = message.chat.id;
-  const text = message.text;
-
-  if (!userStates[chatId]) return res.sendStatus(200);
-  const user = userStates[chatId];
-
-  if (user.step === 6) {
-    user.data.dimensions = text;
-    user.step = 7;
-
-    // Send confirmation to client
-    await sendMessage(chatId, "Thank you! We’ll get back to you with a price soon.");
-
-    // Send all info to admin
-    await sendMessage(ADMIN_ID, `New order:\nName: ${user.data.name}\nPhone: ${user.data.phone}\nMarketplace: ${user.data.marketplace}\nMode: ${user.data.mode}\nWarehouse: ${user.data.warehouse}\nDimensions: ${user.data.dimensions}`);
-
-    delete userStates[chatId]; // Reset
-  }
-
-  res.sendStatus(200);
-});
-
+// Health check
 app.get("/", (req, res) => {
   res.send("Bot is running.");
 });
