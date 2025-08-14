@@ -1,7 +1,6 @@
 {
   "name": "telegram-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for marketplace fulfillment",
   "main": "index.js",
   "type": "module",
   "scripts": {
